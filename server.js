@@ -1,5 +1,6 @@
 const express = require("express");
 const mongoose = require("mongoose");
+require("dotenv").config();
 
 const deviceRoutes = require("./routes/deviceRoutes");
 const authRoutes = require("./routes/authRoutes");
@@ -7,13 +8,12 @@ const historyRoutes = require("./routes/historyRoutes");
 
 const app = express();
 
-// ================= CORS MANUAL FIX =================
+// ================= CORS FIX =================
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
-  // 🔥 HANDLE PREFLIGHT (INI YANG PENTING)
   if (req.method === "OPTIONS") {
     return res.sendStatus(200);
   }
@@ -29,9 +29,12 @@ app.get("/", (req, res) => {
   res.send("API RUNNING 🚀");
 });
 
-// ================= MONGODB =================
-require("dotenv").config();
+// ================= TEST ROUTE =================
+app.get("/api/test", (req, res) => {
+  res.json({ message: "API OK" });
+});
 
+// ================= MONGODB =================
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB Connected"))
   .catch(err => console.error("Mongo ERROR:", err));
