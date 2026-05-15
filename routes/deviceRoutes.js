@@ -4,24 +4,35 @@ const router = express.Router();
 const Device = require("../models/devices");
 const DeviceHistory = require("../models/deviceHistory");
 
-const auth = require("../middleware/auth");
-
 // GET semua device
-router.get("/", auth, async (req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const devices = await Device.find();
+    const devices = await Device.find().sort({ createdAt: -1 });
     res.json(devices);
   } catch (err) {
-    res.status(500).json({ message: "Error ambil device" });
+    console.error("GET DEVICES ERROR:", err);
+    res.status(500).json({ message: "Error ambil data device" });
   }
 });
 
-// TAMBAH DEVICE
-router.post("/", auth, async (req, res) => {
+// REGISTER device
+router.post("/", async (req, res) => {
   try {
-    const { name, lat, lng } = req.body;
+    const { type, guid, name, lat, lng } = req.body;
+
+    if (!type || !guid || !name || !lat || !lng) {
+      return res.status(400).json({ message: "Semua data wajib diisi" });
+    }
+
+    const existingDevice = await Device.findOne({ guid });
+
+    if (existingDevice) {
+      return res.status(400).json({ message: "GUID device sudah terdaftar" });
+    }
 
     const device = new Device({
+      type,
+      guid,
       name,
       lat,
       lng,
@@ -30,25 +41,34 @@ router.post("/", auth, async (req, res) => {
 
     await device.save();
 
-    // simpan history pertama
     await DeviceHistory.create({
       deviceId: device._id,
+      guid: device.guid,
       name: device.name,
-      status: "online",
+      type: device.type,
+      status: "registered",
     });
 
-    res.json(device);
+    res.json({
+      message: "Device berhasil didaftarkan",
+      device,
+    });
   } catch (err) {
-    res.status(500).json({ message: "Gagal tambah device" });
+    console.error("REGISTER DEVICE ERROR:", err);
+    res.status(500).json({ message: "Gagal register device" });
   }
 });
 
-// UPDATE DEVICE (SIMULASI DEVICE KIRIM DATA)
+// UPDATE heartbeat device
 router.post("/update", async (req, res) => {
   try {
-    const { deviceId } = req.body;
+    const { guid } = req.body;
 
-    const device = await Device.findById(deviceId);
+    if (!guid) {
+      return res.status(400).json({ message: "GUID wajib dikirim" });
+    }
+
+    const device = await Device.findOne({ guid });
 
     if (!device) {
       return res.status(404).json({ message: "Device tidak ditemukan" });
@@ -57,16 +77,77 @@ router.post("/update", async (req, res) => {
     device.lastUpdate = new Date();
     await device.save();
 
-    // status selalu online saat update
     await DeviceHistory.create({
       deviceId: device._id,
+      guid: device.guid,
       name: device.name,
+      type: device.type,
       status: "online",
     });
 
-    res.json({ message: "Device updated" });
+    res.json({
+      message: "Device updated",
+      device,
+    });
   } catch (err) {
+    console.error("UPDATE DEVICE ERROR:", err);
     res.status(500).json({ message: "Error update device" });
+  }
+});
+
+// PANIC BUTTON trigger speaker
+router.post("/panic", async (req, res) => {
+  try {
+    const { guid } = req.body;
+
+    if (!guid) {
+      return res.status(400).json({ message: "GUID panic button wajib dikirim" });
+    }
+
+    const panicDevice = await Device.findOne({ guid });
+
+    if (!panicDevice) {
+      return res.status(404).json({ message: "Panic button tidak ditemukan" });
+    }
+
+    if (panicDevice.type !== "panic_button") {
+      return res.status(400).json({ message: "Device ini bukan panic button" });
+    }
+
+    panicDevice.lastUpdate = new Date();
+    await panicDevice.save();
+
+    const speakers = await Device.find({ type: "speaker" });
+
+    await DeviceHistory.create({
+      deviceId: panicDevice._id,
+      guid: panicDevice.guid,
+      name: panicDevice.name,
+      type: panicDevice.type,
+      status: "panic_triggered",
+    });
+
+    for (const speaker of speakers) {
+      speaker.lastUpdate = new Date();
+      await speaker.save();
+
+      await DeviceHistory.create({
+        deviceId: speaker._id,
+        guid: speaker.guid,
+        name: speaker.name,
+        type: speaker.type,
+        status: "speaker_triggered",
+      });
+    }
+
+    res.json({
+      message: "Panic button triggered speaker",
+      panicButton: panicDevice.name,
+      triggeredSpeakers: speakers.length,
+    });
+  } catch (err) {
+    console.error("PANIC ERROR:", err);
+    res.status(500).json({ message: "Error panic trigger" });
   }
 });
 
