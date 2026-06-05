@@ -10,8 +10,6 @@ const deviceHistorySchema = new mongoose.Schema(
     name: String,
     type: String,
     status: String,
-
-    // untuk snapshot camera
     imageUrl: String,
   },
   { timestamps: true }

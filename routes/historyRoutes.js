@@ -3,19 +3,16 @@ const router = express.Router();
 
 const DeviceHistory = require("../models/deviceHistory");
 
-// GET HISTORY + FILTER
 router.get("/", async (req, res) => {
   try {
     const { type, search, startDate, endDate } = req.query;
 
     const filter = {};
 
-    // FILTER TIPE DEVICE
     if (type && type !== "all") {
       filter.type = type;
     }
 
-    // SEARCH NAMA / GUID / STATUS / TYPE
     if (search && search.trim() !== "") {
       filter.$or = [
         { name: { $regex: search, $options: "i" } },
@@ -25,7 +22,6 @@ router.get("/", async (req, res) => {
       ];
     }
 
-    // FILTER TANGGAL
     if (startDate || endDate) {
       filter.createdAt = {};
 
@@ -51,7 +47,6 @@ router.get("/", async (req, res) => {
   }
 });
 
-// GET CAMERA SNAPSHOTS BY GUID
 router.get("/camera/:guid", async (req, res) => {
   try {
     const { guid } = req.params;

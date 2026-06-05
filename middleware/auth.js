@@ -1,27 +1,42 @@
 const jwt = require("jsonwebtoken");
 
-module.exports = (req, res, next) => {
+function protect(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
 
-    // cek token ada atau tidak
-    if (!authHeader) {
-      return res.status(401).json({ message: "Token tidak ada" });
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({
+        message: "Token tidak ditemukan. Silakan login.",
+      });
     }
 
-    // format: Bearer TOKEN
     const token = authHeader.split(" ")[1];
 
-    if (!token) {
-      return res.status(401).json({ message: "Token invalid" });
-    }
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    const decoded = jwt.verify(token, "SECRET_KEY");
-
-    req.user = decoded; // simpan user ke request
+    req.user = decoded;
 
     next();
   } catch (err) {
-    return res.status(401).json({ message: "Token tidak valid" });
+    return res.status(401).json({
+      message: "Token tidak valid atau sudah expired.",
+    });
   }
+}
+
+function allowRoles(...roles) {
+  return (req, res, next) => {
+    if (!req.user || !roles.includes(req.user.role)) {
+      return res.status(403).json({
+        message: "Akses ditolak.",
+      });
+    }
+
+    next();
+  };
+}
+
+module.exports = {
+  protect,
+  allowRoles,
 };

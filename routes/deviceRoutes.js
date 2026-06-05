@@ -4,7 +4,6 @@ const router = express.Router();
 const Device = require("../models/devices");
 const DeviceHistory = require("../models/deviceHistory");
 
-// GET semua device
 router.get("/", async (req, res) => {
   try {
     const devices = await Device.find().sort({ createdAt: -1 });
@@ -15,7 +14,6 @@ router.get("/", async (req, res) => {
   }
 });
 
-// REGISTER device
 router.post("/", async (req, res) => {
   try {
     const { type, guid, name, lat, lng } = req.body;
@@ -59,7 +57,6 @@ router.post("/", async (req, res) => {
   }
 });
 
-// UPDATE heartbeat device
 router.post("/update", async (req, res) => {
   try {
     const { guid } = req.body;
@@ -95,7 +92,7 @@ router.post("/update", async (req, res) => {
   }
 });
 
-// PANIC BUTTON trigger speaker
+// Endpoint simulasi panic button dari Postman / dashboard
 router.post("/panic", async (req, res) => {
   try {
     const { guid } = req.body;
@@ -111,7 +108,10 @@ router.post("/panic", async (req, res) => {
     }
 
     if (panicDevice.type !== "panic_button") {
-      return res.status(400).json({ message: "Device ini bukan panic button" });
+      return res.status(400).json({
+        message: "Device ini bukan panic button",
+        typeYangTerbaca: panicDevice.type,
+      });
     }
 
     panicDevice.lastUpdate = new Date();
