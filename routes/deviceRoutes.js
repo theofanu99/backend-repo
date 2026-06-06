@@ -22,7 +22,7 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ message: "Semua data wajib diisi" });
     }
 
-    const existingDevice = await Device.findOne({ guid });
+    const existingDevice = await Device.findOne({ guid, type });
 
     if (existingDevice) {
       return res.status(400).json({ message: "GUID device sudah terdaftar" });

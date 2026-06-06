@@ -4,6 +4,7 @@ const Device = require("./models/devices");
 const DeviceHistory = require("./models/deviceHistory");
 
 const RABBITMQ_URL = process.env.RABBITMQ_URL;
+
 const EVENT_QUEUE = process.env.RABBITMQ_EVENT_QUEUE || "tnwk.iot.events";
 const COMMAND_EXCHANGE = process.env.RABBITMQ_COMMAND_EXCHANGE || "amq.topic";
 const COMMAND_ROUTING_PREFIX =
@@ -12,21 +13,14 @@ const COMMAND_ROUTING_PREFIX =
 let channel = null;
 
 function parsePanicPayload(rawMessage) {
-  // Format dari alat: guidDevice#state
-  // Contoh: PB-001#0 atau PB-001#1
-
   const parts = rawMessage.trim().split("#");
 
-  if (parts.length !== 2) {
-    return null;
-  }
+  if (parts.length !== 2) return null;
 
   const guid = parts[0];
   const state = parts[1];
 
-  if (!guid || state === undefined) {
-    return null;
-  }
+  if (!guid || (state !== "0" && state !== "1")) return null;
 
   return {
     guid,
@@ -35,84 +29,105 @@ function parsePanicPayload(rawMessage) {
   };
 }
 
-async function publishSpeakerCommand(speaker, triggeredBy) {
+async function publishSpeakerCommand(speakerGuid, state) {
   if (!channel) {
     console.log("RabbitMQ channel belum siap");
     return;
   }
 
-  const routingKey = `${COMMAND_ROUTING_PREFIX}.${speaker.guid}`;
+  const routingKey = `${COMMAND_ROUTING_PREFIX}.${speakerGuid}`;
 
-  const command = {
-    guid: speaker.guid,
-    action: "play_warning_sound",
-    triggeredBy,
-    timestamp: new Date().toISOString(),
-  };
+  const payload = `${speakerGuid}#${state}`;
 
   channel.publish(
     COMMAND_EXCHANGE,
     routingKey,
-    Buffer.from(JSON.stringify(command)),
+    Buffer.from(payload),
     { persistent: true }
   );
 
-  console.log("COMMAND SENT:", routingKey, command);
+  console.log("SPEAKER COMMAND SENT:", {
+    routingKey,
+    payload,
+  });
 }
 
-async function handlePanicButtonEvent(payload) {
+async function handlePanicEvent(payload) {
   const { guid, state, event } = payload;
 
-  const device = await Device.findOne({ guid });
+  const panicDevice = await Device.findOne({
+    guid,
+    type: "panic_button",
+  });
 
-  if (!device) {
-    console.log(`Device belum terdaftar: ${guid}`);
+  if (!panicDevice) {
+    console.log(`Panic button tidak terdaftar: ${guid}`);
     return;
   }
 
-  if (device.type !== "panic_button") {
-    console.log(`Device ${guid} bukan panic button`);
-    return;
-  }
-
-  device.lastUpdate = new Date();
-  await device.save();
+  panicDevice.lastUpdate = new Date();
+  await panicDevice.save();
 
   await DeviceHistory.create({
-    deviceId: device._id,
-    guid: device.guid,
-    name: device.name,
-    type: device.type,
+    deviceId: panicDevice._id,
+    guid: panicDevice.guid,
+    name: panicDevice.name,
+    type: panicDevice.type,
     status: event,
   });
 
-  console.log(`History saved: ${device.guid} - ${event}`);
+  console.log(`History saved: ${panicDevice.guid} - ${event}`);
 
-  // state 0 = ditekan, trigger speaker
+  // state 0 = tombol ditekan
   if (state === "0") {
-    const speakers = await Device.find({ type: "speaker" });
+    const speaker = await Device.findOne({
+      guid: panicDevice.guid,
+      type: "speaker",
+    });
 
-    for (const speaker of speakers) {
-      speaker.lastUpdate = new Date();
-      await speaker.save();
+    if (!speaker) {
+      console.log(`Speaker pasangan tidak ditemukan untuk GUID ${panicDevice.guid}`);
+      return;
+    }
 
+    speaker.lastUpdate = new Date();
+    await speaker.save();
+
+    await DeviceHistory.create({
+      deviceId: speaker._id,
+      guid: speaker.guid,
+      name: speaker.name,
+      type: speaker.type,
+      status: "speaker_triggered",
+    });
+
+    // kirim ON ke speaker pasangan
+    await publishSpeakerCommand(speaker.guid, "1");
+
+    console.log(`Panic button ${panicDevice.guid} trigger speaker ${speaker.guid}`);
+  }
+
+  // state 1 = tombol dilepas
+  if (state === "1") {
+    const speaker = await Device.findOne({
+      guid: panicDevice.guid,
+      type: "speaker",
+    });
+
+    if (speaker) {
       await DeviceHistory.create({
         deviceId: speaker._id,
         guid: speaker.guid,
         name: speaker.name,
         type: speaker.type,
-        status: "speaker_triggered",
+        status: "speaker_stopped",
       });
 
-      await publishSpeakerCommand(speaker, device.guid);
+      // kirim OFF ke speaker pasangan
+      await publishSpeakerCommand(speaker.guid, "0");
+
+      console.log(`Speaker ${speaker.guid} dimatikan`);
     }
-
-    console.log(`Panic button ${device.guid} trigger ${speakers.length} speaker`);
-  }
-
-  // state 1 = dilepas, hanya dicatat
-  if (state === "1") {
-    console.log(`Panic button ${device.guid} released`);
   }
 }
 
@@ -149,7 +164,7 @@ async function startRabbitMQConsumer() {
 
         console.log("RMQ PARSED PAYLOAD:", payload);
 
-        await handlePanicButtonEvent(payload);
+        await handlePanicEvent(payload);
 
         channel.ack(msg);
       } catch (err) {
