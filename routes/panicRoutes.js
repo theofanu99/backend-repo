@@ -27,11 +27,48 @@ function calculateDistanceKm(lat1, lon1, lat2, lon2) {
   return earthRadiusKm * c;
 }
 
+function getDeviceGuid(device) {
+  return (
+    device.guid ||
+    device.deviceId ||
+    device.device_id ||
+    device.code ||
+    device._id?.toString()
+  );
+}
+
+function getDeviceName(device) {
+  return (
+    device.name ||
+    device.deviceName ||
+    device.label ||
+    getDeviceGuid(device) ||
+    "Speaker"
+  );
+}
+
+function getDeviceLat(device) {
+  return Number(device.lat ?? device.latitude ?? device.location?.lat);
+}
+
+function getDeviceLng(device) {
+  return Number(device.lng ?? device.longitude ?? device.location?.lng);
+}
+
 async function findNearestSpeaker(latitude, longitude) {
+  const userLat = Number(latitude);
+  const userLng = Number(longitude);
+
+  if (Number.isNaN(userLat) || Number.isNaN(userLng)) {
+    console.log("INVALID USER COORDINATE:", { latitude, longitude });
+    return null;
+  }
+
   const speakers = await Device.find({
-  type: "speaker",
-  status: "online",
-});
+    type: "speaker",
+  });
+
+  console.log("TOTAL SPEAKERS FOUND:", speakers.length);
 
   if (!speakers || speakers.length === 0) {
     return null;
@@ -41,17 +78,33 @@ async function findNearestSpeaker(latitude, longitude) {
   let nearestDistance = Infinity;
 
   for (const speaker of speakers) {
-    const speakerLat = Number(speaker.lat);
-    const speakerLng = Number(speaker.lng);
+    const speakerGuid = getDeviceGuid(speaker);
+    const speakerName = getDeviceName(speaker);
+    const speakerLat = getDeviceLat(speaker);
+    const speakerLng = getDeviceLng(speaker);
 
-    if (!speakerLat || !speakerLng) continue;
+    console.log("CHECK SPEAKER:", {
+      guid: speakerGuid,
+      name: speakerName,
+      type: speaker.type,
+      status: speaker.status,
+      lat: speakerLat,
+      lng: speakerLng,
+    });
+
+    if (Number.isNaN(speakerLat) || Number.isNaN(speakerLng)) {
+      console.log("SKIP SPEAKER - invalid coordinate:", speakerGuid);
+      continue;
+    }
 
     const distance = calculateDistanceKm(
-      latitude,
-      longitude,
+      userLat,
+      userLng,
       speakerLat,
       speakerLng
     );
+
+    console.log("DISTANCE:", speakerGuid, distance, "km");
 
     if (distance < nearestDistance) {
       nearestDistance = distance;
@@ -88,10 +141,23 @@ router.post("/app-trigger", protect, async (req, res) => {
 
     const nearestResult = await findNearestSpeaker(latitude, longitude);
 
-    const selectedSpeaker = nearestResult?.speaker;
-    const selectedSpeakerGuid = selectedSpeaker?.guid || "SPK-001";
-    const selectedSpeakerName = selectedSpeaker?.name || "Speaker Default";
+    const selectedSpeaker = nearestResult?.speaker || null;
+
+    const selectedSpeakerGuid = selectedSpeaker
+      ? getDeviceGuid(selectedSpeaker)
+      : "SPK-001";
+
+    const selectedSpeakerName = selectedSpeaker
+      ? getDeviceName(selectedSpeaker)
+      : "Speaker Default";
+
     const distanceKm = nearestResult?.distanceKm || 0;
+
+    console.log("SELECTED SPEAKER:", {
+      guid: selectedSpeakerGuid,
+      name: selectedSpeakerName,
+      distanceKm: Number(distanceKm.toFixed(3)),
+    });
 
     const report = await Report.create({
       id: randomUUID(),
@@ -131,6 +197,7 @@ router.post("/app-trigger", protect, async (req, res) => {
     console.error("APP PANIC BUTTON ERROR:", err);
     res.status(500).json({
       message: "Gagal memicu panic button",
+      error: err.message,
     });
   }
 });

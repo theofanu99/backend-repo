@@ -151,4 +151,27 @@ router.post("/panic", async (req, res) => {
   }
 });
 
+// DELETE device by ID
+router.delete("/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const device = await Device.findById(id);
+
+    if (!device) {
+      return res.status(404).json({ message: "Device tidak ditemukan" });
+    }
+
+    await Device.findByIdAndDelete(id);
+
+    res.json({
+      message: "Device berhasil dihapus",
+      deletedDevice: device,
+    });
+  } catch (err) {
+    console.error("DELETE DEVICE ERROR:", err);
+    res.status(500).json({ message: "Gagal menghapus device" });
+  }
+});
+
 module.exports = router;
