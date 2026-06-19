@@ -6,54 +6,91 @@ const DeviceHistory = require("./models/deviceHistory");
 const RABBITMQ_URL = process.env.RABBITMQ_URL;
 
 const EVENT_QUEUE = process.env.RABBITMQ_EVENT_QUEUE || "tnwk.iot.events";
-const COMMAND_EXCHANGE = process.env.RABBITMQ_COMMAND_EXCHANGE || "amq.topic";
-const COMMAND_ROUTING_PREFIX =
-  process.env.RABBITMQ_COMMAND_ROUTING_PREFIX || "tnwk.commands.speaker";
+
+const COMMAND_EXCHANGE =
+  process.env.RABBITMQ_COMMAND_EXCHANGE || "amq.topic";
+
+const COMMAND_ROUTING_KEY =
+  process.env.RABBITMQ_COMMAND_ROUTING_KEY || "tnwk.speaker.command";
 
 let channel = null;
 
-function parsePanicPayload(rawMessage) {
+function parseDevicePayload(rawMessage) {
   const parts = rawMessage.trim().split("#");
 
-  if (parts.length !== 2) return null;
+  if (parts.length !== 2) {
+    return null;
+  }
 
   const guid = parts[0];
   const state = parts[1];
 
-  if (!guid || (state !== "0" && state !== "1")) return null;
+  if (!guid || !state) {
+    return null;
+  }
 
-  return {
-    guid,
-    state,
-    event: state === "0" ? "panic_triggered" : "panic_released",
-  };
+  if (state === "0") {
+    return {
+      guid,
+      state,
+      kind: "panic",
+      event: "panic_triggered",
+    };
+  }
+
+  if (state === "1") {
+    return {
+      guid,
+      state,
+      kind: "panic",
+      event: "panic_released",
+    };
+  }
+
+  if (state === "online") {
+    return {
+      guid,
+      state,
+      kind: "status",
+      event: "device_online",
+    };
+  }
+
+  if (state === "offline") {
+    return {
+      guid,
+      state,
+      kind: "status",
+      event: "device_offline",
+    };
+  }
+
+  return null;
 }
 
 async function publishSpeakerCommand(speakerGuid, state) {
   if (!channel) {
     console.log("RabbitMQ channel belum siap");
-    return;
+    return false;
   }
-
-  const routingKey = `${COMMAND_ROUTING_PREFIX}.${speakerGuid}`;
 
   const payload = `${speakerGuid}#${state}`;
 
-  channel.publish(
-    COMMAND_EXCHANGE,
-    routingKey,
-    Buffer.from(payload),
-    { persistent: true }
-  );
+  channel.publish(COMMAND_EXCHANGE, COMMAND_ROUTING_KEY, Buffer.from(payload), {
+    persistent: true,
+  });
 
   console.log("SPEAKER COMMAND SENT:", {
-    routingKey,
+    exchange: COMMAND_EXCHANGE,
+    routingKey: COMMAND_ROUTING_KEY,
     payload,
   });
+
+  return true;
 }
 
-async function handlePanicEvent(payload) {
-  const { guid, state, event } = payload;
+async function handleDeviceMessage(payload) {
+  const { guid, state, kind, event } = payload;
 
   const panicDevice = await Device.findOne({
     guid,
@@ -68,66 +105,78 @@ async function handlePanicEvent(payload) {
   panicDevice.lastUpdate = new Date();
   await panicDevice.save();
 
+  if (kind === "status") {
+    console.log(`Device status updated only: ${guid} - ${state}`);
+    return;
+  }
+
   await DeviceHistory.create({
     deviceId: panicDevice._id,
     guid: panicDevice.guid,
     name: panicDevice.name,
     type: panicDevice.type,
     status: event,
+    lat: panicDevice.lat,
+    lng: panicDevice.lng,
+    locationName: panicDevice.locationName || panicDevice.name,
+    source: "device",
+    description:
+      state === "0"
+        ? "Panic button fisik ditekan"
+        : "Panic button fisik dilepas",
   });
 
   console.log(`History saved: ${panicDevice.guid} - ${event}`);
 
-  // state 0 = tombol ditekan
+  const speaker = await Device.findOne({
+    guid: panicDevice.guid,
+    type: "speaker",
+  });
+
+  if (!speaker) {
+    console.log(`Speaker pasangan tidak ditemukan untuk GUID ${panicDevice.guid}`);
+    return;
+  }
+
+  speaker.lastUpdate = new Date();
+  await speaker.save();
+
   if (state === "0") {
-    const speaker = await Device.findOne({
-      guid: panicDevice.guid,
-      type: "speaker",
-    });
-
-    if (!speaker) {
-      console.log(`Speaker pasangan tidak ditemukan untuk GUID ${panicDevice.guid}`);
-      return;
-    }
-
-    speaker.lastUpdate = new Date();
-    await speaker.save();
-
     await DeviceHistory.create({
       deviceId: speaker._id,
       guid: speaker.guid,
       name: speaker.name,
       type: speaker.type,
       status: "speaker_triggered",
+      lat: speaker.lat,
+      lng: speaker.lng,
+      locationName: speaker.locationName || speaker.name,
+      source: "device",
+      description: `Speaker aktif karena panic button ${panicDevice.guid} ditekan`,
     });
 
-    // kirim ON ke speaker pasangan
-    await publishSpeakerCommand(speaker.guid, "1");
+    await publishSpeakerCommand(speaker.guid, "0");
 
     console.log(`Panic button ${panicDevice.guid} trigger speaker ${speaker.guid}`);
   }
 
-  // state 1 = tombol dilepas
   if (state === "1") {
-    const speaker = await Device.findOne({
-      guid: panicDevice.guid,
-      type: "speaker",
+    await DeviceHistory.create({
+      deviceId: speaker._id,
+      guid: speaker.guid,
+      name: speaker.name,
+      type: speaker.type,
+      status: "speaker_stopped",
+      lat: speaker.lat,
+      lng: speaker.lng,
+      locationName: speaker.locationName || speaker.name,
+      source: "device",
+      description: `Speaker berhenti karena panic button ${panicDevice.guid} dilepas`,
     });
 
-    if (speaker) {
-      await DeviceHistory.create({
-        deviceId: speaker._id,
-        guid: speaker.guid,
-        name: speaker.name,
-        type: speaker.type,
-        status: "speaker_stopped",
-      });
+    await publishSpeakerCommand(speaker.guid, "1");
 
-      // kirim OFF ke speaker pasangan
-      await publishSpeakerCommand(speaker.guid, "0");
-
-      console.log(`Speaker ${speaker.guid} dimatikan`);
-    }
+    console.log(`Speaker ${speaker.guid} dimatikan`);
   }
 }
 
@@ -145,26 +194,30 @@ async function startRabbitMQConsumer() {
 
     console.log("RabbitMQ Connected");
     console.log(`Listening queue: ${EVENT_QUEUE}`);
+    console.log(`Speaker command exchange: ${COMMAND_EXCHANGE}`);
+    console.log(`Speaker command routing key: ${COMMAND_ROUTING_KEY}`);
 
     channel.consume(EVENT_QUEUE, async (msg) => {
       if (!msg) return;
 
       try {
-        const rawMessage = msg.content.toString();
+        const rawMessage = msg.content.toString().trim();
 
         console.log("RMQ RAW MESSAGE:", rawMessage);
 
-        const payload = parsePanicPayload(rawMessage);
+        const payload = parseDevicePayload(rawMessage);
 
         if (!payload) {
-          console.log("Format payload tidak valid. Gunakan format GUID#STATE");
+          console.log(
+            "Format payload tidak valid. Gunakan GUID#0, GUID#1, GUID#online, atau GUID#offline"
+          );
           channel.ack(msg);
           return;
         }
 
         console.log("RMQ PARSED PAYLOAD:", payload);
 
-        await handlePanicEvent(payload);
+        await handleDeviceMessage(payload);
 
         channel.ack(msg);
       } catch (err) {
@@ -175,6 +228,7 @@ async function startRabbitMQConsumer() {
 
     connection.on("close", () => {
       console.log("RabbitMQ connection closed. Reconnecting...");
+      channel = null;
       setTimeout(startRabbitMQConsumer, 5000);
     });
 
@@ -183,8 +237,12 @@ async function startRabbitMQConsumer() {
     });
   } catch (err) {
     console.error("RabbitMQ connection failed:", err.message);
+    channel = null;
     setTimeout(startRabbitMQConsumer, 5000);
   }
 }
 
-module.exports = startRabbitMQConsumer;
+module.exports = {
+  startRabbitMQConsumer,
+  publishSpeakerCommand,
+};

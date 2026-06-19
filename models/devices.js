@@ -8,7 +8,6 @@ const deviceSchema = new mongoose.Schema(
       enum: ["panic_button", "camera", "speaker"],
     },
 
-    
     guid: {
       type: String,
       required: true,
@@ -29,6 +28,11 @@ const deviceSchema = new mongoose.Schema(
       required: true,
     },
 
+    locationName: {
+      type: String,
+      default: "",
+    },
+
     lastUpdate: {
       type: Date,
       default: Date.now,
@@ -37,8 +41,7 @@ const deviceSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Kombinasi guid + type harus unik
-// Jadi GUID sama boleh, tapi type-nya harus beda
 deviceSchema.index({ guid: 1, type: 1 }, { unique: true });
 
-module.exports = mongoose.model("Device", deviceSchema);
+module.exports =
+  mongoose.models.Device || mongoose.model("Device", deviceSchema);

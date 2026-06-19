@@ -6,13 +6,55 @@ const deviceHistorySchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Device",
     },
-    guid: String,
-    name: String,
-    type: String,
-    status: String,
-    imageUrl: String,
+
+    guid: {
+      type: String,
+    },
+
+    name: {
+      type: String,
+    },
+
+    type: {
+      type: String,
+    },
+
+    status: {
+      type: String,
+    },
+
+    imageUrl: {
+      type: String,
+    },
+
+    lat: {
+      type: Number,
+    },
+
+    lng: {
+      type: Number,
+    },
+
+    locationName: {
+      type: String,
+    },
+
+    source: {
+      type: String,
+      default: "device",
+    },
+
+    reporterName: {
+      type: String,
+    },
+
+    description: {
+      type: String,
+    },
   },
   { timestamps: true }
 );
 
-module.exports = mongoose.model("DeviceHistory", deviceHistorySchema);
+module.exports =
+  mongoose.models.DeviceHistory ||
+  mongoose.model("DeviceHistory", deviceHistorySchema);

@@ -4,10 +4,17 @@ const { randomUUID } = require("crypto");
 const Report = require("../models/report");
 const User = require("../models/user");
 const Device = require("../models/devices");
+const DeviceHistory = require("../models/deviceHistory");
 const SpeakerCommand = require("../models/speakerCommand");
 const { protect } = require("../middleware/auth");
+const { publishSpeakerCommand } = require("../rabbitmqConsumer");
 
 const router = express.Router();
+
+// 0 = ON
+// 1 = OFF
+const SPEAKER_ON_COMMAND = "0";
+const SPEAKER_OFF_COMMAND = "1";
 
 function calculateDistanceKm(lat1, lon1, lat2, lon2) {
   const earthRadiusKm = 6371;
@@ -140,25 +147,27 @@ router.post("/app-trigger", protect, async (req, res) => {
     }
 
     const nearestResult = await findNearestSpeaker(latitude, longitude);
-
     const selectedSpeaker = nearestResult?.speaker || null;
 
-    const selectedSpeakerGuid = selectedSpeaker
-      ? getDeviceGuid(selectedSpeaker)
-      : "SPK-001";
+    if (!selectedSpeaker) {
+      return res.status(404).json({
+        message: "Speaker terdekat tidak ditemukan",
+      });
+    }
 
-    const selectedSpeakerName = selectedSpeaker
-      ? getDeviceName(selectedSpeaker)
-      : "Speaker Default";
-
+    const selectedSpeakerGuid = getDeviceGuid(selectedSpeaker);
+    const selectedSpeakerName = getDeviceName(selectedSpeaker);
     const distanceKm = nearestResult?.distanceKm || 0;
+    const commandDuration = Number(duration) || 30;
 
     console.log("SELECTED SPEAKER:", {
       guid: selectedSpeakerGuid,
       name: selectedSpeakerName,
       distanceKm: Number(distanceKm.toFixed(3)),
+      duration: commandDuration,
     });
 
+    // 1. Simpan laporan warga
     const report = await Report.create({
       id: randomUUID(),
       userId: user._id.toString(),
@@ -173,15 +182,101 @@ router.post("/app-trigger", protect, async (req, res) => {
       priority: "emergency",
     });
 
+    // 2. Simpan history panic dari aplikasi warga
+    await DeviceHistory.create({
+      guid: "APP-PANIC",
+      name: `Panic dari ${user.name}`,
+      type: "panic_button",
+      status: "panic_triggered",
+      lat: latitude,
+      lng: longitude,
+      locationName,
+      source: "citizen_app",
+      reporterName: user.name,
+      description: `Panic digital dari aplikasi warga. Lokasi: ${locationName}`,
+    });
+
+    // 3. Simpan command speaker ke database
     const speakerCommand = await SpeakerCommand.create({
       deviceId: selectedSpeakerGuid,
       command: "ON",
       status: "pending",
-      duration,
+      duration: commandDuration,
       triggeredBy: user.email,
       triggeredByName: user.name,
       source: "panic_button",
     });
+
+    // 4. Simpan history speaker triggered
+    await DeviceHistory.create({
+      deviceId: selectedSpeaker._id,
+      guid: selectedSpeakerGuid,
+      name: selectedSpeakerName,
+      type: "speaker",
+      status: "speaker_triggered",
+      lat: getDeviceLat(selectedSpeaker),
+      lng: getDeviceLng(selectedSpeaker),
+      locationName: selectedSpeaker.locationName || selectedSpeakerName,
+      source: "citizen_app",
+      reporterName: user.name,
+      description: `Speaker aktif karena panic digital dari aplikasi warga. Jarak: ${Number(
+        distanceKm.toFixed(3)
+      )} km`,
+    });
+
+    // 5. Kirim command ON ke RabbitMQ
+    await publishSpeakerCommand(selectedSpeakerGuid, SPEAKER_ON_COMMAND);
+
+    console.log(
+      `SPEAKER ON SENT: ${selectedSpeakerGuid}#${SPEAKER_ON_COMMAND}`
+    );
+
+    // 6. Setelah durasi selesai, kirim command OFF otomatis
+    setTimeout(async () => {
+      try {
+        await publishSpeakerCommand(selectedSpeakerGuid, SPEAKER_OFF_COMMAND);
+
+        await SpeakerCommand.findByIdAndUpdate(
+          speakerCommand._id,
+          {
+            status: "executed",
+          },
+          {
+            returnDocument: "after",
+          }
+        );
+
+        await DeviceHistory.create({
+          deviceId: selectedSpeaker._id,
+          guid: selectedSpeakerGuid,
+          name: selectedSpeakerName,
+          type: "speaker",
+          status: "speaker_off",
+          lat: getDeviceLat(selectedSpeaker),
+          lng: getDeviceLng(selectedSpeaker),
+          locationName: selectedSpeaker.locationName || selectedSpeakerName,
+          source: "system_auto",
+          reporterName: user.name,
+          description: `Speaker otomatis dimatikan setelah ${commandDuration} detik.`,
+        });
+
+        console.log(
+          `SPEAKER OFF SENT: ${selectedSpeakerGuid}#${SPEAKER_OFF_COMMAND}`
+        );
+      } catch (error) {
+        console.error("AUTO SPEAKER OFF ERROR:", error.message);
+
+        await SpeakerCommand.findByIdAndUpdate(
+          speakerCommand._id,
+          {
+            status: "failed",
+          },
+          {
+            returnDocument: "after",
+          }
+        );
+      }
+    }, commandDuration * 1000);
 
     res.status(201).json({
       message: "Panic button berhasil dipicu",

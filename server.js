@@ -8,11 +8,13 @@ const historyRoutes = require("./routes/historyRoutes");
 const panicRoutes = require("./routes/panicRoutes");
 const reportRoutes = require("./routes/reportRoutes");
 const speakerRoutes = require("./routes/speakerRoutes");
-const startRabbitMQConsumer = require("./rabbitmqConsumer");
+const citizenRoutes = require("./routes/citizenRoutes");
 
+const { startRabbitMQConsumer } = require("./rabbitmqConsumer");
 
 const app = express();
 
+// ================= CORS =================
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader(
@@ -28,8 +30,10 @@ app.use((req, res, next) => {
   next();
 });
 
+// ================= MIDDLEWARE =================
 app.use(express.json());
 
+// ================= TEST ROUTES =================
 app.get("/", (req, res) => {
   res.send("API RUNNING");
 });
@@ -38,6 +42,17 @@ app.get("/api/test", (req, res) => {
   res.json({ message: "API OK" });
 });
 
+// ================= MAIN ROUTES =================
+app.use("/api/auth", authRoutes);
+app.use("/api/devices", deviceRoutes);
+app.use("/api/history", historyRoutes);
+app.use("/api/panic", panicRoutes);
+app.use("/api/speaker", speakerRoutes);
+app.use("/api/reports", reportRoutes);
+app.use("/api/citizen", citizenRoutes);
+
+
+// ================= MONGODB + RABBITMQ =================
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => {
@@ -46,13 +61,7 @@ mongoose
   })
   .catch((err) => console.error("Mongo ERROR:", err));
 
-app.use("/api/auth", authRoutes);
-app.use("/api/devices", deviceRoutes);
-app.use("/api/history", historyRoutes);
-app.use("/api/panic", panicRoutes);
-app.use("/api/speaker", speakerRoutes);
-app.use("/api/reports", reportRoutes);
-
+// ================= START SERVER =================
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, "0.0.0.0", () => {

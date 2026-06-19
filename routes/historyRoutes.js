@@ -5,7 +5,7 @@ const DeviceHistory = require("../models/deviceHistory");
 
 router.get("/", async (req, res) => {
   try {
-    const { type, search, startDate, endDate } = req.query;
+    const { type, status, source, date, search } = req.query;
 
     const filter = {};
 
@@ -13,37 +13,49 @@ router.get("/", async (req, res) => {
       filter.type = type;
     }
 
-    if (search && search.trim() !== "") {
+    if (status && status !== "all") {
+      filter.status = status;
+    }
+
+    if (source && source !== "all") {
+      filter.source = source;
+    }
+
+    if (date) {
+      const start = new Date(date);
+      const end = new Date(date);
+
+      end.setDate(end.getDate() + 1);
+
+      filter.createdAt = {
+        $gte: start,
+        $lt: end,
+      };
+    }
+
+    if (search) {
       filter.$or = [
-        { name: { $regex: search, $options: "i" } },
         { guid: { $regex: search, $options: "i" } },
+        { name: { $regex: search, $options: "i" } },
         { status: { $regex: search, $options: "i" } },
         { type: { $regex: search, $options: "i" } },
+        { source: { $regex: search, $options: "i" } },
+        { locationName: { $regex: search, $options: "i" } },
+        { reporterName: { $regex: search, $options: "i" } },
       ];
     }
 
-    if (startDate || endDate) {
-      filter.createdAt = {};
-
-      if (startDate) {
-        filter.createdAt.$gte = new Date(startDate);
-      }
-
-      if (endDate) {
-        const end = new Date(endDate);
-        end.setHours(23, 59, 59, 999);
-        filter.createdAt.$lte = end;
-      }
-    }
-
-    const history = await DeviceHistory.find(filter)
+    const histories = await DeviceHistory.find(filter)
       .sort({ createdAt: -1 })
-      .limit(100);
+      .limit(200);
 
-    res.json(history);
+    res.json(histories);
   } catch (err) {
-    console.error("HISTORY ERROR:", err);
-    res.status(500).json({ message: "Error ambil history" });
+    console.error("GET HISTORY ERROR:", err);
+    res.status(500).json({
+      message: "Gagal mengambil data history",
+      error: err.message,
+    });
   }
 });
 
@@ -51,18 +63,19 @@ router.get("/camera/:guid", async (req, res) => {
   try {
     const { guid } = req.params;
 
-    const snapshots = await DeviceHistory.find({
+    const histories = await DeviceHistory.find({
       guid,
       type: "camera",
       imageUrl: { $exists: true, $ne: "" },
-    })
-      .sort({ createdAt: -1 })
-      .limit(100);
+    }).sort({ createdAt: -1 });
 
-    res.json(snapshots);
+    res.json(histories);
   } catch (err) {
-    console.error("CAMERA DETAIL ERROR:", err);
-    res.status(500).json({ message: "Error ambil detail camera" });
+    console.error("GET CAMERA HISTORY ERROR:", err);
+    res.status(500).json({
+      message: "Gagal mengambil history camera",
+      error: err.message,
+    });
   }
 });
 

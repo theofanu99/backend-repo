@@ -7,10 +7,48 @@ const DeviceHistory = require("../models/deviceHistory");
 router.get("/", async (req, res) => {
   try {
     const devices = await Device.find().sort({ createdAt: -1 });
-    res.json(devices);
-  } catch (err) {
-    console.error("GET DEVICES ERROR:", err);
-    res.status(500).json({ message: "Error ambil data device" });
+
+    const result = devices.map((device) => {
+      const obj = device.toObject();
+
+      let connectionStatus = "offline";
+
+      if (obj.lastUpdate) {
+        const now = Date.now();
+        const lastUpdateTime = new Date(obj.lastUpdate).getTime();
+        const diff = now - lastUpdateTime;
+
+        // kalau lastUpdate kurang dari 30 detik, dianggap online
+        if (diff <= 30000) {
+          connectionStatus = "online";
+        }
+      }
+
+      return {
+        ...obj,
+
+        // status koneksi device
+        connectionStatus,
+
+        // status fungsi alat: standby / alert
+        functionStatus: obj.status,
+
+        // status yang dipakai website untuk badge
+        displayStatus:
+          connectionStatus === "offline"
+            ? "offline"
+            : obj.status === "alert"
+            ? "alert"
+            : "online",
+      };
+    });
+
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({
+      message: "Gagal mengambil data device",
+      error: error.message,
+    });
   }
 });
 
@@ -171,6 +209,32 @@ router.delete("/:id", async (req, res) => {
   } catch (err) {
     console.error("DELETE DEVICE ERROR:", err);
     res.status(500).json({ message: "Gagal menghapus device" });
+  }
+});
+
+router.get("/:id", async (req, res) => {
+  try {
+    const device = await Device.findById(req.params.id);
+
+    if (!device) {
+      return res.status(404).json({ message: "Device not found" });
+    }
+
+    res.json(device);
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch device detail" });
+  }
+});
+
+router.get("/:id/history", async (req, res) => {
+  try {
+    const histories = await DeviceHistory.find({
+      deviceId: req.params.id,
+    }).sort({ createdAt: -1 });
+
+    res.json(histories);
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch device history" });
   }
 });
 

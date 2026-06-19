@@ -2,29 +2,34 @@ const express = require("express");
 const router = express.Router();
 
 const Report = require("../models/report");
+const { protect, allowRoles } = require("../middleware/auth");
 
-// GET semua laporan atau filter by userId
-router.get("/", async (req, res) => {
+// GET laporan
+router.get("/", protect, async (req, res) => {
   try {
-    const { userId } = req.query;
+    let filter = {};
 
-    const filter = userId ? { userId } : {};
+    if (req.user.role === "warga") {
+      filter = { userId: req.user.id };
+    }
 
     const reports = await Report.find(filter).sort({ createdAt: -1 });
 
     res.json(reports);
   } catch (err) {
     console.error("GET REPORTS ERROR:", err);
-    res.status(500).json({ message: "Error ambil data laporan" });
+    res.status(500).json({
+      message: "Gagal mengambil data laporan",
+      error: err.message,
+    });
   }
 });
 
-// CREATE laporan
-router.post("/", async (req, res) => {
+// CREATE laporan manual dari form warga
+router.post("/", protect, async (req, res) => {
   try {
     const {
       id,
-      userId,
       reporterName,
       reporterEmail,
       type,
@@ -36,18 +41,17 @@ router.post("/", async (req, res) => {
       priority,
     } = req.body;
 
-    if (!id || !reporterName || !type || !description || !locationName) {
+    if (!id || !type || !description || !locationName) {
       return res.status(400).json({
-        message:
-          "id, reporterName, type, description, dan locationName wajib diisi",
+        message: "id, type, description, dan locationName wajib diisi",
       });
     }
 
     const report = await Report.create({
       id,
-      userId: userId || "",
-      reporterName,
-      reporterEmail: reporterEmail || "",
+      userId: req.user.id,
+      reporterName: reporterName || req.user.name || "Warga",
+      reporterEmail: reporterEmail || req.user.email || "",
       type,
       description,
       locationName,
@@ -63,60 +67,92 @@ router.post("/", async (req, res) => {
     });
   } catch (err) {
     console.error("CREATE REPORT ERROR:", err);
-
-    if (err.code === 11000) {
-      return res.status(400).json({ message: "ID laporan sudah ada" });
-    }
-
-    res.status(500).json({ message: "Gagal membuat laporan" });
+    res.status(500).json({
+      message: "Gagal membuat laporan",
+      error: err.message,
+    });
   }
 });
 
-// UPDATE status laporan
-router.patch("/:id/status", async (req, res) => {
-  try {
-    const { status } = req.body;
+// UPDATE status laporan - petugas/admin only
+router.patch(
+  "/:id/status",
+  protect,
+  allowRoles("petugas", "admin"),
+  async (req, res) => {
+    try {
+      const { status } = req.body;
 
-    if (!["pending", "process", "done"].includes(status)) {
-      return res.status(400).json({
-        message: "Status tidak valid",
+      if (!["pending", "process", "done"].includes(status)) {
+        return res.status(400).json({
+          message: "Status tidak valid",
+        });
+      }
+
+      const updateData = {
+        status,
+      };
+
+      // Kalau laporan sudah selesai, jangan tampil Darurat lagi
+      if (status === "done") {
+        updateData.priority = "normal";
+      }
+
+      // Kalau dikembalikan ke pending/process, priority tetap mengikuti data sebelumnya
+      // Jadi panic button masih bisa terlihat darurat selama belum selesai
+
+      const report = await Report.findOneAndUpdate(
+        { id: req.params.id },
+        updateData,
+        { returnDocument: "after" }
+      );
+
+      if (!report) {
+        return res.status(404).json({
+          message: "Laporan tidak ditemukan",
+        });
+      }
+
+      res.json({
+        message: "Status laporan berhasil diperbarui",
+        report,
+      });
+    } catch (err) {
+      console.error("UPDATE REPORT ERROR:", err);
+      res.status(500).json({
+        message: "Gagal update status laporan",
+        error: err.message,
       });
     }
-
-    const report = await Report.findOneAndUpdate(
-      { id: req.params.id },
-      { status },
-      { new: true }
-    );
-
-    if (!report) {
-      return res.status(404).json({ message: "Laporan tidak ditemukan" });
-    }
-
-    res.json({
-      message: "Status laporan berhasil diperbarui",
-      report,
-    });
-  } catch (err) {
-    console.error("UPDATE REPORT STATUS ERROR:", err);
-    res.status(500).json({ message: "Gagal update status laporan" });
   }
-});
+);
 
-// DELETE laporan
-router.delete("/:id", async (req, res) => {
-  try {
-    const report = await Report.findOneAndDelete({ id: req.params.id });
+// DELETE laporan - admin only
+router.delete(
+  "/:id",
+  protect,
+  allowRoles("admin"),
+  async (req, res) => {
+    try {
+      const report = await Report.findOneAndDelete({ id: req.params.id });
 
-    if (!report) {
-      return res.status(404).json({ message: "Laporan tidak ditemukan" });
+      if (!report) {
+        return res.status(404).json({
+          message: "Laporan tidak ditemukan",
+        });
+      }
+
+      res.json({
+        message: "Laporan berhasil dihapus",
+      });
+    } catch (err) {
+      console.error("DELETE REPORT ERROR:", err);
+      res.status(500).json({
+        message: "Gagal hapus laporan",
+        error: err.message,
+      });
     }
-
-    res.json({ message: "Laporan berhasil dihapus" });
-  } catch (err) {
-    console.error("DELETE REPORT ERROR:", err);
-    res.status(500).json({ message: "Gagal hapus laporan" });
   }
-});
+);
 
 module.exports = router;
