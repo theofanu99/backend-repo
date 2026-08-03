@@ -76,8 +76,6 @@ RABBITMQ_COMMAND_ROUTING_PREFIX=tnwk.commands.speaker
 
 Catatan:
 
-- Jangan push file `.env` ke GitHub.
-- Pastikan `.env` sudah masuk `.gitignore`.
 - Untuk production, gunakan MongoDB Atlas atau MongoDB server kampus.
 - Untuk RabbitMQ, gunakan credential yang diberikan oleh server/kampus.
 
